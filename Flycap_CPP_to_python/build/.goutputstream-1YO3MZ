@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+import argparse
+import os
+import random
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.optim as optim
+import torch.utils.data
+from torch.autograd import Variable
+import torch.nn.functional as F
+import skimage
+import skimage.io
+import skimage.transform
+import numpy as np
+import time
+import math
+from utils import preprocess 
+from models import *
+import sys
+import struct
+import cv2
+import numpy as np
+import torchvision as tv
+import os
+import os.path
+import pbcvt
+
+
+parser = argparse.ArgumentParser(description='DPSimNet at 40 fps')
+
+#parser.add_argument('--img_path', default=None,
+#                    help='path to the left image folder')
+# parser.add_argument('--right_vid', default=None,
+#                     help='path to he right image folder')
+parser.add_argument('--output_path', default=None,
+                    help='path to the output folder')
+parser.add_argument('--maxdisp', type=int, default=256,
+                    help='maxium disparity')
+
+args = parser.parse_args()
+
+seed = 1
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+
+IMG_EXTENSIONS = [
+    '.jpg', '.JPG', '.jpeg', '.JPEG',
+    '.png', '.PNG', '.bmp', '.BMP',
+]
+
+
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+"""
+def dataloader(filepath):
+
+    all_left_img=[]
+    all_right_img=[]
+    all_left_disp = []
+    test_left_img=[]
+    test_right_img=[]
+    test_left_disp = []
+
+
+    classes = [d for d in os.listdir(filepath) if os.path.isdir(os.path.join(filepath, d))]
+    image = [img for img in classes if img.find('frames_cleanpass') > -1]
+    # disp  = [dsp for dsp in classes if dsp.find('disparity') > -1]
+
+    driving_dir = filepath + [x for x in image if 'driving' in x][0] + '/'
+    # driving_disp = filepath + [x for x in disp if 'driving' in x][0]
+
+    # subdir1 = ['15mm_focallength','35mm_focallength']
+    # subdir2 = ['scene_backwards','scene_forwards']
+    # subdir3 = ['fast','slow']
+    #******************************************
+    #subdir1 = ['15mm_focallength']
+    #subdir2 = ['scene_forwards']
+    subdir3 = ['slow']
+
+    for i in subdir1:
+      for j in subdir2:
+        for k in subdir3:
+          imm_l = os.listdir(driving_dir+i+'/'+j+'/'+k+'/left/')    
+          for im in imm_l:
+            if is_image_file(driving_dir+i+'/'+j+'/'+k+'/left/'+im):
+              all_left_img.append(driving_dir+i+'/'+j+'/'+k+'/left/'+im)
+            
+            if is_image_file(driving_dir+i+'/'+j+'/'+k+'/right/'+im):
+              all_right_img.append(driving_dir+i+'/'+j+'/'+k+'/right/'+im)
+
+
+    return all_left_img, all_right_img
+
+"""
+#test_left_img, test_right_img = dataloader(args.img_path)
+
+maxdisp = args.maxdisp
+
+model = basic(maxdisp)
+
+model = nn.DataParallel(model, device_ids=[0])
+model.cuda()
+
+state_dict = torch.load('/media/nvidia/b08e3d3c-4ab2-4614-b6c7-fb5b011786ac4/utsav/Fast_DSimNet/checkpoint_30.tar')
+
+model.load_state_dict(state_dict['state_dict'])
+
+def test(imgL, imgR):
+        model.eval()
+
+
+        imgL = torch.FloatTensor(imgL).cuda()
+        imgR = torch.FloatTensor(imgR).cuda()     
+
+        imgL, imgR= Variable(imgL), Variable(imgR)
+
+        with torch.no_grad():
+            output = model(imgL, imgR)
+        output = torch.squeeze(output)
+        tw = time.time()
+        pred_disp = output.data.cpu().numpy()
+        print('Time for CPU conversion: ', (time.time() - tw))
+        
+        return pred_disp
+        # return output
+
+def main():
+
+  
+  frame = 0
+  ta = time.time()
+  # for imgl_path, imgr_path in enumerate(test_left_img, test_right_img):
+  pbcvt.Init_Flycapture()
+  pbcvt.Init_LoadMapping()
+  while True:
+      input_image = pbcvt.Stream_Flycapture()
+      input_image = cv2.resize(input_image,(1024, 720))
+      left_view = input_image[480:600, 0:1024]
+      left_view = cv2.resize(left_view, (1024, 240))
+      right_view = input_image[120:240, 0:1024]
+      right_view = cv2.resize(right_view, (1024, 240))      
+
+
+      #imgL_tmp = cv2.imread("left.png").astype('float32')
+      #imgR_tmp = cv2.imread("right.png").astype('float32') 
+      imgL_tmp = left_view
+      imgR_tmp =	      
+
+      imgL_o = cv2.resize(imgL_tmp, (0,0), fx = 0.5, fy = 0.5)
+      imgR_o = cv2.resize(imgR_tmp, (0,0), fx = 0.5, fy = 0.5)
+
+      processed = preprocess.get_transform(augment=False)
+
+      original_h, original_w = imgL_o.shape[0], imgL_o.shape[1]
+
+      imgL = processed(imgL_o).numpy()
+      imgR = processed(imgR_o).numpy()
+      imgL = np.reshape(imgL,[1,3,imgL.shape[1],imgL.shape[2]])
+      imgR = np.reshape(imgR,[1,3,imgR.shape[1],imgR.shape[2]])
+
+      t1 = time.time()
+      pred_disp = test(imgL, imgR)
+      t2 = time.time()
+
+      
+      print("Frame: {0}; Time: {1}".format(frame, t2-t1))
+      print('*******************************************************')
+
+      img = cv2.resize(pred_disp, (original_w, original_h))
+      img = (img*256).astype('uint16')
+
+      cv2.imwrite(args.output_path+'frame_'+str(frame)+'_.png', img)
+
+      frame = frame + 1
+      
+  tb = time.time()
+  print('Total time: {0} s'.format(tb-ta))
+
+if __name__ == '__main__':
+   main()
+
+
+
+
+
+
